@@ -83,7 +83,8 @@ class CloudDataStore(private val context: Context) {
                     "productsCount" to products.size,
                     "customersCount" to customers.size,
                     "salesCount" to sales.size,
-                    "batchesCount" to batches.size
+                    "batchesCount" to batches.size,
+                    "paymentsCount" to payments.size
                 )
                 userDoc.set(summary, SetOptions.merge()).await()
 
@@ -159,6 +160,20 @@ class CloudDataStore(private val context: Context) {
                         ).await()
                 }
 
+                for (pay in payments) {
+                    userDoc.collection("payments").document(pay.id.toString())
+                        .set(
+                            mapOf(
+                                "id" to pay.id,
+                                "customerId" to pay.customerId,
+                                "amountPaid" to pay.amountPaid,
+                                "dateString" to pay.dateString,
+                                "timestamp" to pay.timestamp,
+                                "isDeleted" to pay.isDeleted
+                            )
+                        ).await()
+                }
+
                 // Delete remote docs that are no longer present
                 try {
                     val remoteProds = userDoc.collection("products").get().await()
@@ -182,6 +197,12 @@ class CloudDataStore(private val context: Context) {
                     val remoteSales = userDoc.collection("sales").get().await()
                     remoteSales.documents.forEach { doc ->
                         if (sales.none { it.id.toString() == doc.id }) {
+                            doc.reference.delete().await()
+                        }
+                    }
+                    val remotePayments = userDoc.collection("payments").get().await()
+                    remotePayments.documents.forEach { doc ->
+                        if (payments.none { it.id.toString() == doc.id }) {
                             doc.reference.delete().await()
                         }
                     }
@@ -291,12 +312,27 @@ class CloudDataStore(private val context: Context) {
                     } catch (e: Exception) { null }
                 }
 
-                if (products.isNotEmpty() || customers.isNotEmpty() || sales.isNotEmpty() || batches.isNotEmpty()) {
+                val paymentDocs = userDoc.collection("payments").get().await()
+                val payments = paymentDocs.mapNotNull { d ->
+                    try {
+                        PaymentTransaction(
+                            id = d.getLong("id") ?: 0L,
+                            customerId = d.getLong("customerId") ?: 0L,
+                            amountPaid = d.getDouble("amountPaid") ?: 0.0,
+                            dateString = d.getString("dateString") ?: "",
+                            timestamp = d.getLong("timestamp") ?: System.currentTimeMillis(),
+                            isDeleted = d.getBoolean("isDeleted") ?: false
+                        )
+                    } catch (e: Exception) { null }
+                }
+
+                if (products.isNotEmpty() || customers.isNotEmpty() || sales.isNotEmpty() || batches.isNotEmpty() || payments.isNotEmpty()) {
                     return@withContext CloudSyncPayload(
                         products = products,
                         customers = customers,
                         batches = batches,
                         sales = sales,
+                        payments = payments,
                         timestamp = System.currentTimeMillis()
                     )
                 } else {
@@ -305,6 +341,7 @@ class CloudDataStore(private val context: Context) {
                         customers = emptyList(),
                         batches = emptyList(),
                         sales = emptyList(),
+                        payments = emptyList(),
                         timestamp = System.currentTimeMillis()
                     )
                 }
@@ -680,6 +717,39 @@ class CloudDataStore(private val context: Context) {
         }
     }
 
+    suspend fun savePaymentToCloud(email: String, payment: PaymentTransaction) = withContext(Dispatchers.IO) {
+        if (!isFirebaseConfigured() || email.isBlank()) return@withContext
+        try {
+            val db = FirebaseFirestore.getInstance()
+            val userDoc = db.collection("users").document(sanitizeEmailForPath(email))
+            userDoc.collection("payments").document(payment.id.toString())
+                .set(
+                    mapOf(
+                        "id" to payment.id,
+                        "customerId" to payment.customerId,
+                        "amountPaid" to payment.amountPaid,
+                        "dateString" to payment.dateString,
+                        "timestamp" to payment.timestamp,
+                        "isDeleted" to payment.isDeleted
+                    ),
+                    SetOptions.merge()
+                ).await()
+        } catch (e: Exception) {
+            Log.w(tag, "savePaymentToCloud error: ${e.message}")
+        }
+    }
+
+    suspend fun deletePaymentFromCloud(email: String, paymentId: Long) = withContext(Dispatchers.IO) {
+        if (!isFirebaseConfigured() || email.isBlank()) return@withContext
+        try {
+            val db = FirebaseFirestore.getInstance()
+            db.collection("users").document(sanitizeEmailForPath(email))
+                .collection("payments").document(paymentId.toString()).delete().await()
+        } catch (e: Exception) {
+            Log.w(tag, "deletePaymentFromCloud error: ${e.message}")
+        }
+    }
+
     suspend fun clearUserCloudData(email: String) = withContext(Dispatchers.IO) {
         if (!isFirebaseConfigured() || email.isBlank()) return@withContext
         try {
@@ -689,6 +759,7 @@ class CloudDataStore(private val context: Context) {
             userDoc.collection("customers").get().await().forEach { it.reference.delete().await() }
             userDoc.collection("batches").get().await().forEach { it.reference.delete().await() }
             userDoc.collection("sales").get().await().forEach { it.reference.delete().await() }
+            userDoc.collection("payments").get().await().forEach { it.reference.delete().await() }
             userDoc.delete().await()
         } catch (e: Exception) {
             Log.w(tag, "clearUserCloudData error: ${e.message}")

@@ -303,7 +303,13 @@ class TradeRepository(
     }
 
     suspend fun addPayment(payment: PaymentTransaction) = withContext(Dispatchers.IO) {
-        paymentDao.insertPayment(payment)
+        val id = paymentDao.insertPayment(payment)
+        val createdPayment = payment.copy(id = id)
+        val account = authManager.accountInfo.value
+        if (account.isLinked) {
+            cloudDataStore.savePaymentToCloud(account.email, createdPayment)
+        }
+        autoSyncIfEnabled()
     }
 
     suspend fun deleteSale(sale: SaleTransaction) = withContext(Dispatchers.IO) {
@@ -410,6 +416,12 @@ class TradeRepository(
                 saleDao.deleteAllSales()
                 saleDao.insertAll(payload.sales)
                 restoredCount += payload.sales.size
+            }
+            if (payload.payments.isNotEmpty()) {
+                // Merge only: local payments are never wiped on sign-in,
+                // so cloud payments are added without deleting local ones.
+                paymentDao.insertAll(payload.payments)
+                restoredCount += payload.payments.size
             }
 
             if (restoredCount > 0) {
