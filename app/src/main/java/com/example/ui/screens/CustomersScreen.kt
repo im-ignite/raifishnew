@@ -52,9 +52,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -336,16 +339,10 @@ fun CustomerItemCard(
                     }
                 }
 
-                // Invoice Button — no invoice action exists in the codebase,
-                // so mirror the reference: a short toast.
+                // Invoice Button — opens the invoice sheet with the payment
+                // history (how much was paid, on which date).
                 IconButton(
-                    onClick = {
-                        Toast.makeText(
-                            context,
-                            "Invoice summary copied for ${customer.name}",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    },
+                    onClick = { showTransactionsDialog = true },
                     modifier = Modifier.size(36.dp)
                 ) {
                     Icon(
@@ -562,41 +559,123 @@ fun CustomerItemCard(
 
     if (showTransactionsDialog) {
         val payments by getPaymentsForCustomer(customer.id).collectAsState(initial = emptyList())
-        AlertDialog(
-            onDismissRequest = { showTransactionsDialog = false },
-            title = { Text(if (strings.isHindi) "${customer.name} के भुगतान लेनदेन" else "Payment Transactions for ${customer.name}") },
-            text = {
-                if (payments.isEmpty()) {
-                    Text(strings.noPaymentsRecordedMsg, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
-                    LazyColumn {
-                        items(payments) { payment ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = payment.dateString,
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                                Text(
-                                    text = "₹${String.format("%.2f", payment.amountPaid)}",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = geminiAccent()
-                                )
-                            }
+        val totalBilled = totalSpent
+        val totalPaid = payments.sumOf { it.amountPaid }
+        val balanceDue = totalBilled - totalPaid
+        val clipboardManager = LocalClipboardManager.current
+        GeminiBottomSheet(onDismissRequest = { showTransactionsDialog = false }) {
+            GeminiSheetHeader(
+                title = if (strings.isHindi) "${customer.name} का चालान" else "Invoice for ${customer.name}",
+                onClose = { showTransactionsDialog = false }
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            InvoiceSummaryRow(
+                label = if (strings.isHindi) "कुल बिल" else "Total billed",
+                amount = totalBilled,
+                amountColor = MaterialTheme.colorScheme.onSurface
+            )
+            InvoiceSummaryRow(
+                label = if (strings.isHindi) "कुल भुगतान" else "Total paid",
+                amount = totalPaid,
+                amountColor = geminiAccent()
+            )
+            InvoiceSummaryRow(
+                label = if (strings.isHindi) "बाकी" else "Balance due",
+                amount = balanceDue,
+                amountColor = if (balanceDue > 0.01) MaterialTheme.bahi.danger else MaterialTheme.bahi.success,
+                bold = true
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            GeminiHairline()
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = if (strings.isHindi) "भुगतान इतिहास (${payments.size})" else "Payment history (${payments.size})",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            if (payments.isEmpty()) {
+                Text(
+                    text = strings.noPaymentsRecordedMsg,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                LazyColumn(modifier = Modifier.weight(1f, fill = false)) {
+                    items(payments) { payment ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = payment.dateString,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "₹${String.format("%.2f", payment.amountPaid)}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = geminiAccent()
+                            )
                         }
                     }
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = { showTransactionsDialog = false }) {
-                    Text(strings.closeButtonTitle)
-                }
             }
+            Spacer(modifier = Modifier.height(16.dp))
+            GeminiGradientButton(
+                label = if (strings.isHindi) "चालान कॉपी करें" else "Copy invoice",
+                onClick = {
+                    val invoiceText = buildString {
+                        appendLine(if (strings.isHindi) "${customer.name} का चालान" else "Invoice for ${customer.name}")
+                        appendLine("${if (strings.isHindi) "कुल बिल" else "Total billed"}: ₹${String.format("%.2f", totalBilled)}")
+                        appendLine("${if (strings.isHindi) "कुल भुगतान" else "Total paid"}: ₹${String.format("%.2f", totalPaid)}")
+                        appendLine("${if (strings.isHindi) "बाकी" else "Balance due"}: ₹${String.format("%.2f", balanceDue)}")
+                        appendLine(if (strings.isHindi) "भुगतान इतिहास:" else "Payment history:")
+                        payments.forEach { payment ->
+                            appendLine("${payment.dateString}: ₹${String.format("%.2f", payment.amountPaid)}")
+                        }
+                    }
+                    clipboardManager.setText(AnnotatedString(invoiceText))
+                    Toast.makeText(
+                        context,
+                        if (strings.isHindi) "चालान कॉपी हो गया" else "Invoice copied",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+    }
+}
+
+@Composable
+private fun InvoiceSummaryRow(
+    label: String,
+    amount: Double,
+    amountColor: Color,
+    bold: Boolean = false
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = "₹${String.format("%.2f", amount)}",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (bold) FontWeight.Bold else FontWeight.SemiBold,
+            color = amountColor
         )
     }
 }
