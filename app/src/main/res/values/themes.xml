@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.MyApplication" parent="android:Theme.DeviceDefault.NoActionBar" />
+    <!-- DayNight parent so the app follows the phone's display mode
+         (light / dark / automatic) instead of staying dark. -->
+    <style name="Theme.MyApplication" parent="android:Theme.Material.DayNight.NoActionBar" />
 </resources>
