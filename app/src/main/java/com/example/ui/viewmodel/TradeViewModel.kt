@@ -265,23 +265,27 @@ class TradeViewModel(
             val customerSales = allSales.value.filter { it.customerId == customerId }
                 .sortedBy { it.timestamp }
 
+            // Work out every affected order first, then settle them in one
+            // batch (one cloud upload + one sync) instead of one sync per order.
+            val updatedSales = mutableListOf<SaleTransaction>()
             for (sale in customerSales) {
                 val dueAmount = sale.totalPrice - sale.amountPaid
                 if (dueAmount > 0) {
                     if (remainingAmount >= dueAmount) {
                         // Fully pay this sale
-                        val updatedSale = sale.copy(amountPaid = sale.amountPaid + dueAmount)
-                        repository.updateSale(updatedSale)
+                        updatedSales.add(sale.copy(amountPaid = sale.amountPaid + dueAmount))
                         remainingAmount -= dueAmount
                     } else {
                         // Partially pay this sale
-                        val updatedSale = sale.copy(amountPaid = sale.amountPaid + remainingAmount)
-                        repository.updateSale(updatedSale)
+                        updatedSales.add(sale.copy(amountPaid = sale.amountPaid + remainingAmount))
                         remainingAmount = 0.0
                     }
                 }
                 
                 if (remainingAmount <= 0) break
+            }
+            if (updatedSales.isNotEmpty()) {
+                repository.updateSalesBatch(updatedSales)
             }
         }
     }

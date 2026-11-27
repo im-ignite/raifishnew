@@ -393,11 +393,12 @@ fun SaleTransactionCard(
 }
 
 @Composable
-fun PaymentStatusBadge(amountPaid: Double, totalPrice: Double) {
+fun PaymentStatusBadge(amountPaid: Double, totalPrice: Double, isSynced: Boolean = true) {
     val dueAmount = totalPrice - amountPaid
 
     val (backgroundColor, textColor, text) = when {
-        amountPaid >= totalPrice -> Triple(Color(0xFFE8F5E9), Color(0xFF2E7D32), "Paid / पूरा भुगतान")
+        amountPaid >= totalPrice && isSynced -> Triple(Color(0xFFE8F5E9), Color(0xFF2E7D32), "Paid / पूरा भुगतान")
+        amountPaid >= totalPrice -> Triple(Color(0xFFE3F2FD), Color(0xFF1565C0), "Paid • syncing…")
         amountPaid > 0 -> Triple(Color(0xFFFFF3E0), Color(0xFFEF6C00), "Partial / आंशिक: ₹$amountPaid, Due: ₹${"%.2f".format(dueAmount)}")
         else -> Triple(Color(0xFFFFEBEE), Color(0xFFC62828), "Unpaid / बाकी: ₹${"%.2f".format(dueAmount)}")
     }

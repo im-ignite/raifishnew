@@ -532,7 +532,7 @@ fun CustomerItemCard(
                                             }
                                         }
                                     }
-                                    PaymentStatusBadge(amountPaid = sale.amountPaid, totalPrice = sale.totalPrice)
+                                    PaymentStatusBadge(amountPaid = sale.amountPaid, totalPrice = sale.totalPrice, isSynced = sale.isSynced)
                                 }
                             }
                         }

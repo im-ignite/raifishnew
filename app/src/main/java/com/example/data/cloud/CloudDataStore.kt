@@ -11,6 +11,7 @@ import com.google.firebase.FirebaseApp
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -570,6 +571,30 @@ class CloudDataStore(private val context: Context) {
         }
     }
 
+    // Slow connections can drop a write that would have succeeded a moment
+    // later. Retry a few times with backoff instead of silently losing it.
+    // Returns true only when Firestore confirmed the write.
+    private suspend fun retryCloudWrite(block: suspend () -> Unit): Boolean {
+        var delayMs = 1000L
+        repeat(2) {
+            try {
+                block()
+                return true
+            } catch (e: Exception) {
+                Log.w(tag, "Cloud write failed, retrying: ${e.message}")
+            }
+            delay(delayMs)
+            delayMs *= 2
+        }
+        return try {
+            block()
+            true
+        } catch (e: Exception) {
+            Log.w(tag, "Cloud write failed after retries: ${e.message}")
+            false
+        }
+    }
+
     suspend fun saveProductToCloud(email: String, product: ProductItem) = withContext(Dispatchers.IO) {
         if (!isFirebaseConfigured() || email.isBlank()) return@withContext
         try {
@@ -676,9 +701,9 @@ class CloudDataStore(private val context: Context) {
         }
     }
 
-    suspend fun saveSaleToCloud(email: String, sale: SaleTransaction) = withContext(Dispatchers.IO) {
-        if (!isFirebaseConfigured() || email.isBlank()) return@withContext
-        try {
+    suspend fun saveSaleToCloud(email: String, sale: SaleTransaction): Boolean = withContext(Dispatchers.IO) {
+        if (!isFirebaseConfigured() || email.isBlank()) return@withContext false
+        retryCloudWrite {
             val db = FirebaseFirestore.getInstance()
             val userDoc = db.collection("users").document(sanitizeEmailForPath(email))
             userDoc.collection("sales").document(sale.id.toString())
@@ -701,8 +726,6 @@ class CloudDataStore(private val context: Context) {
                     ),
                     SetOptions.merge()
                 ).await()
-        } catch (e: Exception) {
-            Log.w(tag, "saveSaleToCloud error: ${e.message}")
         }
     }
 
@@ -717,9 +740,9 @@ class CloudDataStore(private val context: Context) {
         }
     }
 
-    suspend fun savePaymentToCloud(email: String, payment: PaymentTransaction) = withContext(Dispatchers.IO) {
-        if (!isFirebaseConfigured() || email.isBlank()) return@withContext
-        try {
+    suspend fun savePaymentToCloud(email: String, payment: PaymentTransaction): Boolean = withContext(Dispatchers.IO) {
+        if (!isFirebaseConfigured() || email.isBlank()) return@withContext false
+        retryCloudWrite {
             val db = FirebaseFirestore.getInstance()
             val userDoc = db.collection("users").document(sanitizeEmailForPath(email))
             userDoc.collection("payments").document(payment.id.toString())
@@ -734,8 +757,6 @@ class CloudDataStore(private val context: Context) {
                     ),
                     SetOptions.merge()
                 ).await()
-        } catch (e: Exception) {
-            Log.w(tag, "savePaymentToCloud error: ${e.message}")
         }
     }
 

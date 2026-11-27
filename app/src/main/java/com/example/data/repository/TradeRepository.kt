@@ -21,10 +21,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 
 class TradeRepository(
     val database: AppDatabase,
@@ -49,6 +51,12 @@ class TradeRepository(
     val lastSyncLog = _lastSyncLog.asStateFlow()
 
     private val repoScope = CoroutineScope(Dispatchers.IO)
+
+    // Sync serialization: only one cloud sync runs at a time. Overlapping
+    // requests set a flag instead of starting another sync, and the running
+    // sync does one extra pass afterwards to catch them.
+    private val syncMutex = Mutex()
+    private val syncPending = AtomicBoolean(false)
 
     init {
         // If user is already linked with Google account, trigger silent initial sync
@@ -265,7 +273,7 @@ class TradeRepository(
             totalPrice = totalPrice,
             dateString = dateString,
             amountPaid = amountPaid,
-            isSynced = true
+            isSynced = false
         )
         val id = saleDao.insertSale(sale)
         val createdSale = sale.copy(id = id)
@@ -280,24 +288,39 @@ class TradeRepository(
         }
 
         val account = authManager.accountInfo.value
-        if (account.isLinked) {
+        val confirmed = !account.isLinked ||
             cloudDataStore.saveSaleToCloud(account.email, createdSale)
+        if (confirmed) {
+            saleDao.updateSale(createdSale.copy(isSynced = true))
         }
 
         notificationHelper.sendSaleRecordedNotification(customerName, totalPrice, weightKg)
         autoSyncIfEnabled()
     }
 
-    suspend fun updateSale(sale: SaleTransaction) = withContext(Dispatchers.IO) {
-        val calculatedTotal = sale.weightKg * sale.pricePerKg
-        val updatedSale = sale.copy(
-            totalPrice = calculatedTotal,
-            isSynced = true
-        )
-        saleDao.updateSale(updatedSale)
+    suspend fun updateSale(sale: SaleTransaction) = updateSalesBatch(listOf(sale))
+
+    // Update several sales together (one big payment clearing many orders):
+    // all local updates and cloud writes happen in one pass, then a single
+    // sync runs at the end instead of one sync per order.
+    suspend fun updateSalesBatch(updatedSales: List<SaleTransaction>) = withContext(Dispatchers.IO) {
+        if (updatedSales.isEmpty()) return@withContext
         val account = authManager.accountInfo.value
-        if (account.isLinked) {
-            cloudDataStore.saveSaleToCloud(account.email, updatedSale)
+        for (sale in updatedSales) {
+            val calculatedTotal = sale.weightKg * sale.pricePerKg
+            val pendingSale = sale.copy(
+                totalPrice = calculatedTotal,
+                isSynced = false
+            )
+            saleDao.updateSale(pendingSale)
+            // Confirm the cloud write before marking the row synced, so the UI
+            // can show "syncing" until Firebase really has it. Offline
+            // accounts have nothing to confirm, so they stay marked synced.
+            val confirmed = !account.isLinked ||
+                cloudDataStore.saveSaleToCloud(account.email, pendingSale)
+            if (confirmed) {
+                saleDao.updateSale(pendingSale.copy(isSynced = true))
+            }
         }
         autoSyncIfEnabled()
     }
@@ -434,36 +457,55 @@ class TradeRepository(
         }
     }
 
-    // Dual-write Cloud Synchronization Engine
+    // Dual-write Cloud Synchronization Engine.
+    // Only one sync runs at a time: overlapping requests set syncPending and
+    // are covered by one extra pass afterwards, instead of racing each other.
     suspend fun triggerCloudSync(notifyUser: Boolean = true): Boolean = withContext(Dispatchers.IO) {
+        if (!syncMutex.tryLock()) {
+            syncPending.set(true)
+            return@withContext false
+        }
+        try {
+            var result = runSyncWithRetries(notifyUser)
+            while (syncPending.getAndSet(false)) {
+                result = runSyncWithRetries(false)
+            }
+            return@withContext result
+        } finally {
+            syncMutex.unlock()
+        }
+    }
+
+    private suspend fun runSyncWithRetries(notifyUser: Boolean): Boolean {
+        var result = runSync(notifyUser)
+        var attempt = 1
+        while (!result && attempt < 3) {
+            delay(2000L * attempt)
+            attempt++
+            result = runSync(false)
+        }
+        return result
+    }
+
+    private suspend fun runSync(notifyUser: Boolean): Boolean {
         val account = authManager.accountInfo.value
         if (!account.isLinked || account.email.isBlank()) {
             _lastSyncLog.value = "Please sign in with Google to sync data online"
-            return@withContext false
+            return false
         }
 
         _syncStatus.value = SyncStatus.SYNCING
         _lastSyncLog.value = "Syncing with Google Cloud..."
 
         try {
-            // 1. Pull remote updates first so nothing is overwritten
-            val cloudPayload = cloudDataStore.fetchCloudData(account.email)
-            if (cloudPayload != null) {
-                if (cloudPayload.products.isNotEmpty()) productDao.insertAll(cloudPayload.products)
-                if (cloudPayload.customers.isNotEmpty()) customerDao.insertAll(cloudPayload.customers)
-                if (cloudPayload.batches.isNotEmpty()) batchDao.insertAll(cloudPayload.batches)
-                if (cloudPayload.sales.isNotEmpty()) saleDao.insertAll(cloudPayload.sales)
-                if (cloudPayload.payments.isNotEmpty()) paymentDao.insertAll(cloudPayload.payments)
-            }
-
-            // 2. Fetch combined local records
+            // 1. Upload local records FIRST, so a download afterwards can
+            // never bring back older numbers and undo a fresh payment.
             val currentProducts = productDao.getAllProductsIncludingDeletedList()
             val currentCustomers = customerDao.getAllCustomersIncludingDeletedList()
             val currentBatches = batchDao.getAllBatchesIncludingDeletedList()
             val currentSales = saleDao.getAllSalesIncludingDeletedList()
             val currentPayments = paymentDao.getAllPaymentsIncludingDeletedList()
 
-            // 3. Upload combined records to Cloud
             val success = cloudDataStore.uploadToCloud(
                 email = account.email,
                 products = currentProducts,
@@ -473,9 +515,37 @@ class TradeRepository(
                 payments = currentPayments
             )
 
+            // 2. Then pull remote updates (rows added on another device, if any).
+            // Never let the download overwrite a local row that is still
+            // waiting to be confirmed — that row is newer than the cloud copy.
+            val cloudPayload = cloudDataStore.fetchCloudData(account.email)
+            if (cloudPayload != null) {
+                if (cloudPayload.products.isNotEmpty()) productDao.insertAll(cloudPayload.products)
+                if (cloudPayload.customers.isNotEmpty()) customerDao.insertAll(cloudPayload.customers)
+                if (cloudPayload.batches.isNotEmpty()) {
+                    val localBatches = batchDao.getAllBatchesList().associateBy { it.id }
+                    val freshBatches = cloudPayload.batches.filter { cloud ->
+                        val local = localBatches[cloud.id]
+                        local == null || local.isSynced
+                    }
+                    if (freshBatches.isNotEmpty()) batchDao.insertAll(freshBatches)
+                }
+                if (cloudPayload.sales.isNotEmpty()) {
+                    val localSales = saleDao.getAllSalesList().associateBy { it.id }
+                    val freshSales = cloudPayload.sales.filter { cloud ->
+                        val local = localSales[cloud.id]
+                        local == null || local.isSynced
+                    }
+                    if (freshSales.isNotEmpty()) saleDao.insertAll(freshSales)
+                }
+                if (cloudPayload.payments.isNotEmpty()) paymentDao.insertAll(cloudPayload.payments)
+            }
+
             val now = System.currentTimeMillis()
-            batchDao.markAllAsSynced(now)
-            saleDao.markAllAsSynced()
+            if (success) {
+                batchDao.markAllAsSynced(now)
+                saleDao.markAllAsSynced()
+            }
 
             val totalSynced = currentProducts.size + currentCustomers.size + currentBatches.size + currentSales.size + currentPayments.size
             authManager.updateSyncMetadata(now, totalSynced)
@@ -490,11 +560,11 @@ class TradeRepository(
                     "Stored $totalSynced records online for ${account.email}"
                 )
             }
-            return@withContext success
+            return success
         } catch (e: Exception) {
             _syncStatus.value = SyncStatus.ERROR
             _lastSyncLog.value = "Sync failed: ${e.localizedMessage ?: "Unknown error"}"
-            return@withContext false
+            return false
         } finally {
             delay(1200)
             _syncStatus.value = SyncStatus.IDLE
