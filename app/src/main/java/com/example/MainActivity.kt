@@ -516,6 +516,10 @@ fun MainAppScreen(
                             viewModel.registerCustomerPayment(customerId, amount, dateString)
                             Toast.makeText(context, "Payment of ₹$amount recorded", Toast.LENGTH_SHORT).show()
                         },
+                        onMarkSalePaid = { sale ->
+                            viewModel.markSalePaid(sale)
+                            Toast.makeText(context, "Payment done — ₹${String.format("%.2f", sale.totalPrice - sale.amountPaid)} recorded", Toast.LENGTH_SHORT).show()
+                        },
                         getPaymentsForCustomer = { customerId ->
                             viewModel.getPaymentsForCustomer(customerId)
                         }

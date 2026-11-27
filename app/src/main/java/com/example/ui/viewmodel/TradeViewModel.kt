@@ -286,6 +286,24 @@ class TradeViewModel(
         }
     }
 
+    fun markSalePaid(sale: SaleTransaction) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val due = sale.totalPrice - sale.amountPaid
+            if (due <= 0.0) return@launch
+            // Record the remaining balance as a payment (with today's date),
+            // so it syncs to Firebase like any other payment, then settle the order.
+            val dateString = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+            repository.addPayment(
+                PaymentTransaction(
+                    customerId = sale.customerId ?: 0L,
+                    amountPaid = due,
+                    dateString = dateString
+                )
+            )
+            repository.updateSale(sale.copy(amountPaid = sale.totalPrice))
+        }
+    }
+
     fun getPaymentsForCustomer(customerId: Long) = repository.getPaymentsForCustomer(customerId)
 
     // Cloud & Google Account Sync

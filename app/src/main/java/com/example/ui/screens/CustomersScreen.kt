@@ -90,6 +90,7 @@ fun CustomersScreen(
     onUpdateSale: (SaleTransaction) -> Unit = {},
     onNavigateToSales: () -> Unit,
     onAddPayment: (Long, Double, String) -> Unit,
+    onMarkSalePaid: (SaleTransaction) -> Unit = {},
     getPaymentsForCustomer: (Long) -> Flow<List<PaymentTransaction>>,
     modifier: Modifier = Modifier
 ) {
@@ -170,6 +171,7 @@ fun CustomersScreen(
                     onDelete = { customerToDelete = customer },
                     onEditSale = { saleToEdit = it },
                     onAddPayment = onAddPayment,
+                    onMarkSalePaid = onMarkSalePaid,
                     getPaymentsForCustomer = getPaymentsForCustomer
                 )
                 GeminiHairline()
@@ -256,6 +258,7 @@ fun CustomerItemCard(
     onDelete: () -> Unit = {},
     onEditSale: (SaleTransaction) -> Unit = {},
     onAddPayment: (Long, Double, String) -> Unit,
+    onMarkSalePaid: (SaleTransaction) -> Unit = {},
     getPaymentsForCustomer: (Long) -> Flow<List<PaymentTransaction>>,
     modifier: Modifier = Modifier
 ) {
@@ -512,6 +515,20 @@ fun CustomerItemCard(
                                                     tint = geminiAccent(),
                                                     modifier = Modifier.size(16.dp)
                                                 )
+                                            }
+                                            if (sale.amountPaid < sale.totalPrice) {
+                                                TextButton(
+                                                    onClick = { onMarkSalePaid(sale) },
+                                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                                                    modifier = Modifier.testTag("mark_paid_sale_${sale.id}")
+                                                ) {
+                                                    Text(
+                                                        text = "Payment Done",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = geminiAccent()
+                                                    )
+                                                }
                                             }
                                         }
                                     }

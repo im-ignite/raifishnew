@@ -464,7 +464,7 @@ fun RecordFishSaleDialog(
     var productDropdownExpanded by remember { mutableStateOf(false) }
 
     var weightInput by remember { mutableStateOf("") }
-    var piecesInput by remember { mutableStateOf("1") }
+    var piecesInput by remember { mutableStateOf("") }
     var amountPaidInput by remember { mutableStateOf("") }
     var rateInput by remember {
         mutableStateOf(selectedProduct?.pricePerKg?.toString() ?: "120.0")
@@ -473,7 +473,7 @@ fun RecordFishSaleDialog(
 
     // Live calculations
     val inputWeight = weightInput.toDoubleOrNull() ?: 0.0
-    val inputPieces = piecesInput.toIntOrNull() ?: 1
+    val inputPieces = piecesInput.toIntOrNull() ?: 0
     val inputRate = rateInput.toDoubleOrNull() ?: 0.0
     val calculatedTotal = inputWeight * inputRate
 
