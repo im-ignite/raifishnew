@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <!-- DayNight parent so the app follows the phone's display mode
+    <!-- DeviceDefault.DayNight so the app follows the phone's display mode
          (light / dark / automatic) instead of staying dark.
-         NOTE: android:Theme.Material.DayNight.NoActionBar does not exist,
-         so the ActionBar is switched off here instead. -->
-    <style name="Theme.MyApplication" parent="android:Theme.Material.DayNight">
+         NOTE: Theme.Material.DayNight does not exist in Android — checked
+         Android's own source. DeviceDefault.DayNight is the framework's
+         DayNight theme, and it lives in the same family as the old parent
+         that always built fine. The ActionBar is switched off below. -->
+    <style name="Theme.MyApplication" parent="android:Theme.DeviceDefault.DayNight">
         <item name="android:windowActionBar">false</item>
         <item name="android:windowNoTitle">true</item>
     </style>
