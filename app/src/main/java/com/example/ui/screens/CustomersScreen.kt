@@ -115,17 +115,75 @@ fun CustomersScreen(
         }
     }
 
-    // Regular customers: repeat buyers (2 or more orders), most orders first.
-    // They get their own section at the top with orders open, so their full
-    // order list is visible without tapping. Nothing else on the screen changes.
-    val regularCustomers = remember(customers, sales) {
-        customers
-            .map { customer ->
-                customer to sales.filter { it.customerId == customer.id || it.customerName == customer.name }
+    // Regular customers, built from SALES — not just saved clients — so buyers
+    // recorded under a typed name (like "Regular Customer") show up too, even
+    // though they were never added as a client. Every buyer with at least one
+    // order is a regular here, biggest spenders first. Entries for buyers
+    // with no saved client are read-only (no call / invoice / payment /
+    // delete — those need a real client record).
+    val regularEntries = remember(customers, sales) {
+        val savedById = customers.associateBy { it.id }
+        val savedByName = customers.associateBy { it.name }
+        val groups = linkedMapOf<String, MutableList<SaleTransaction>>()
+        sales.forEach { sale ->
+            val saved = savedById[sale.customerId] ?: savedByName[sale.customerName]
+            val key = if (saved != null) "id:${saved.id}" else "name:${sale.customerName}"
+            groups.getOrPut(key) { mutableListOf() }.add(sale)
+        }
+        groups.entries.map { (key, groupSales) ->
+            val first = groupSales.first()
+            val saved = savedById[first.customerId] ?: savedByName[first.customerName]
+            RegularEntry(
+                key = "regular_$key",
+                customer = saved ?: Customer(
+                    id = -1L,
+                    name = first.customerName,
+                    phoneNumber = "",
+                    address = ""
+                ),
+                salesHistory = groupSales,
+                isSaved = saved != null
+            )
+        }.sortedByDescending { it.salesHistory.sumOf { sale -> sale.totalPrice } }
+    }
+
+    // Saved clients shown in the "All Clients" list: everyone except the
+    // regulars (a client must not appear twice on the same screen).
+    val regularSavedIds = remember(regularEntries) {
+        regularEntries.filter { it.isSaved }.map { it.customer.id }.toSet()
+    }
+    val nonRegularCustomers = remember(filteredCustomers, regularSavedIds) {
+        filteredCustomers.filter { it.id !in regularSavedIds }
+    }
+
+    // Main list entries. When not searching, only the non-regular saved
+    // clients (regulars already have their section above). When searching,
+    // every matching saved client plus any matching unsaved buyer.
+    val mainEntries = remember(filteredCustomers, nonRegularCustomers, regularEntries, sales, searchQuery) {
+        if (searchQuery.isBlank()) {
+            nonRegularCustomers.map { customer ->
+                RegularEntry(
+                    key = "client_${customer.id}",
+                    customer = customer,
+                    salesHistory = sales.filter { it.customerId == customer.id || it.customerName == customer.name },
+                    isSaved = true
+                )
             }
-            .filter { (_, customerSales) -> customerSales.size >= 2 }
-            .sortedByDescending { (_, customerSales) -> customerSales.size }
-            .map { (customer, _) -> customer }
+        } else {
+            val q = searchQuery.trim().lowercase()
+            val savedEntries = filteredCustomers.map { customer ->
+                RegularEntry(
+                    key = "client_${customer.id}",
+                    customer = customer,
+                    salesHistory = sales.filter { it.customerId == customer.id || it.customerName == customer.name },
+                    isSaved = true
+                )
+            }
+            val unsavedMatches = regularEntries.filter {
+                !it.isSaved && it.customer.name.lowercase().contains(q)
+            }
+            savedEntries + unsavedMatches
+        }
     }
 
     // Payment history for the section at the bottom: all recorded payments,
@@ -180,7 +238,7 @@ fun CustomersScreen(
 
         // Regular Customers section — only when not searching. Same cards as
         // below, but their orders start open so everything is visible at once.
-        if (searchQuery.isBlank() && regularCustomers.isNotEmpty()) {
+        if (searchQuery.isBlank() && regularEntries.isNotEmpty()) {
             item {
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
@@ -200,62 +258,70 @@ fun CustomersScreen(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
             }
-            items(regularCustomers, key = { "regular_${it.id}" }) { customer ->
-                val customerSales = sales.filter { it.customerId == customer.id || it.customerName == customer.name }
+            items(regularEntries, key = { it.key }) { entry ->
                 CustomerItemCard(
-                    customer = customer,
-                    salesHistory = customerSales,
+                    customer = entry.customer,
+                    salesHistory = entry.salesHistory,
                     onNewSale = onNavigateToSales,
-                    onDelete = { customerToDelete = customer },
+                    onDelete = { customerToDelete = entry.customer },
                     onEditSale = { saleToEdit = it },
                     onAddPayment = onAddPayment,
                     onMarkSalePaid = onMarkSalePaid,
                     getPaymentsForCustomer = getPaymentsForCustomer,
-                    expandedByDefault = true
+                    expandedByDefault = true,
+                    readOnly = !entry.isSaved
                 )
                 GeminiHairline()
             }
-            item {
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = if (strings.isHindi) "सभी ग्राहक" else "All Clients",
-                    style = MaterialTheme.typography.headlineSmall.copy(
-                        fontSize = 20.sp,
-                        letterSpacing = (-0.5).sp
-                    ),
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Spacer(modifier = Modifier.height(12.dp))
+            if (mainEntries.isNotEmpty()) {
+                item {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = if (strings.isHindi) "सभी ग्राहक" else "All Clients",
+                        style = MaterialTheme.typography.headlineSmall.copy(
+                            fontSize = 20.sp,
+                            letterSpacing = (-0.5).sp
+                        ),
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
             }
         }
 
-        if (filteredCustomers.isEmpty()) {
+        if (mainEntries.isEmpty() && regularEntries.isEmpty() && searchQuery.isBlank()) {
             item {
                 GeminiEmptyState(
                     icon = Icons.Default.Person,
-                    title = if (searchQuery.isNotBlank()) "No matching clients found." else "No clients yet",
-                    message = if (searchQuery.isNotBlank()) {
-                        "Try a different name or phone number."
-                    } else {
-                        "Add your first client to start tracking their purchases."
-                    },
-                    actionLabel = if (searchQuery.isBlank()) strings.addCustomerButton else null,
-                    onAction = if (searchQuery.isBlank()) ({ showAddDialog = true }) else null
+                    title = "No clients yet",
+                    message = "Add your first client to start tracking their purchases.",
+                    actionLabel = strings.addCustomerButton,
+                    onAction = { showAddDialog = true }
+                )
+            }
+        } else if (mainEntries.isEmpty() && searchQuery.isNotBlank()) {
+            item {
+                GeminiEmptyState(
+                    icon = Icons.Default.Person,
+                    title = "No matching clients found.",
+                    message = "Try a different name or phone number.",
+                    actionLabel = null,
+                    onAction = null
                 )
             }
         } else {
-            items(filteredCustomers, key = { it.id }) { customer ->
-                val customerSales = sales.filter { it.customerId == customer.id || it.customerName == customer.name }
+            items(mainEntries, key = { it.key }) { entry ->
                 CustomerItemCard(
-                    customer = customer,
-                    salesHistory = customerSales,
+                    customer = entry.customer,
+                    salesHistory = entry.salesHistory,
                     onNewSale = onNavigateToSales,
-                    onDelete = { customerToDelete = customer },
+                    onDelete = { customerToDelete = entry.customer },
                     onEditSale = { saleToEdit = it },
                     onAddPayment = onAddPayment,
                     onMarkSalePaid = onMarkSalePaid,
-                    getPaymentsForCustomer = getPaymentsForCustomer
+                    getPaymentsForCustomer = getPaymentsForCustomer,
+                    readOnly = !entry.isSaved
                 )
                 GeminiHairline()
             }
@@ -389,6 +455,16 @@ fun CustomersScreen(
     }
 }
 
+// One row in the Regular Customers section (and the client list): either a
+// saved client, or a buyer known only from their sales (typed name, never
+// added as a client).
+private data class RegularEntry(
+    val key: String,
+    val customer: Customer,
+    val salesHistory: List<SaleTransaction>,
+    val isSaved: Boolean
+)
+
 // Date + time of a payment, e.g. "28 Nov 2026, 5:42 PM". Every payment
 // stores the moment it was recorded (timestamp), old ones included, so the
 // history can show the time as well as the date.
@@ -411,6 +487,7 @@ fun CustomerItemCard(
     onMarkSalePaid: (SaleTransaction) -> Unit = {},
     getPaymentsForCustomer: (Long) -> Flow<List<PaymentTransaction>>,
     expandedByDefault: Boolean = false,
+    readOnly: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     var showPaymentDialog by remember { mutableStateOf(false) }
@@ -459,14 +536,20 @@ fun CustomerItemCard(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = customer.phoneNumber,
+                        text = if (readOnly) {
+                            if (strings.isHindi) "सहेजा हुआ ग्राहक नहीं" else "Not saved as a client"
+                        } else {
+                            customer.phoneNumber
+                        },
                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            // No call / invoice / payment / delete for buyers with no saved
+            // client record — those actions need a real client.
+            if (!readOnly) Row(verticalAlignment = Alignment.CenterVertically) {
                 // Call Phone Intent Button
                 if (customer.phoneNumber.isNotBlank()) {
                     IconButton(
