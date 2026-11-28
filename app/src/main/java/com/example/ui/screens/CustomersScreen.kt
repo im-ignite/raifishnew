@@ -114,6 +114,19 @@ fun CustomersScreen(
         }
     }
 
+    // Regular customers: repeat buyers (2 or more orders), most orders first.
+    // They get their own section at the top with orders open, so their full
+    // order list is visible without tapping. Nothing else on the screen changes.
+    val regularCustomers = remember(customers, sales) {
+        customers
+            .map { customer ->
+                customer to sales.filter { it.customerId == customer.id || it.customerName == customer.name }
+            }
+            .filter { (_, customerSales) -> customerSales.size >= 2 }
+            .sortedByDescending { (_, customerSales) -> customerSales.size }
+            .map { (customer, _) -> customer }
+    }
+
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
@@ -148,6 +161,58 @@ fun CustomersScreen(
                 placeholder = "Search client name or phone..."
             )
             Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        // Regular Customers section — only when not searching. Same cards as
+        // below, but their orders start open so everything is visible at once.
+        if (searchQuery.isBlank() && regularCustomers.isNotEmpty()) {
+            item {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = if (strings.isHindi) "नियमित ग्राहक" else "Regular Customers",
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        fontSize = 20.sp,
+                        letterSpacing = (-0.5).sp
+                    ),
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = if (strings.isHindi) "आपके बार-बार खरीदने वाले ग्राहक — उनके सभी ऑर्डर नीचे खुले हैं।" else "Your repeat buyers — all their orders are open below.",
+                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.5.sp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+            items(regularCustomers, key = { "regular_${it.id}" }) { customer ->
+                val customerSales = sales.filter { it.customerId == customer.id || it.customerName == customer.name }
+                CustomerItemCard(
+                    customer = customer,
+                    salesHistory = customerSales,
+                    onNewSale = onNavigateToSales,
+                    onDelete = { customerToDelete = customer },
+                    onEditSale = { saleToEdit = it },
+                    onAddPayment = onAddPayment,
+                    onMarkSalePaid = onMarkSalePaid,
+                    getPaymentsForCustomer = getPaymentsForCustomer,
+                    expandedByDefault = true
+                )
+                GeminiHairline()
+            }
+            item {
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = if (strings.isHindi) "सभी ग्राहक" else "All Clients",
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        fontSize = 20.sp,
+                        letterSpacing = (-0.5).sp
+                    ),
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+            }
         }
 
         if (filteredCustomers.isEmpty()) {
@@ -263,13 +328,14 @@ fun CustomerItemCard(
     onAddPayment: (Long, Double, String) -> Unit,
     onMarkSalePaid: (SaleTransaction) -> Unit = {},
     getPaymentsForCustomer: (Long) -> Flow<List<PaymentTransaction>>,
+    expandedByDefault: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     var showPaymentDialog by remember { mutableStateOf(false) }
     var showTransactionsDialog by remember { mutableStateOf(false) }
     val strings = LocalAppStrings.current
     val context = LocalContext.current
-    var isExpanded by remember { mutableStateOf(false) }
+    var isExpanded by remember { mutableStateOf(expandedByDefault) }
     val chevronRotation by animateFloatAsState(
         targetValue = if (isExpanded) 180f else 0f,
         label = "salesHistoryChevron"
