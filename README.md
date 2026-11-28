@@ -29,4 +29,4 @@ Every push builds a debug APK: **Actions → Build Debug APK → Artifacts → d
 
 ## Version
 
-1.1
+2.0
