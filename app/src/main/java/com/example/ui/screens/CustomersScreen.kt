@@ -88,6 +88,7 @@ import java.util.Locale
 fun CustomersScreen(
     customers: List<Customer>,
     sales: List<SaleTransaction>,
+    allPayments: List<PaymentTransaction> = emptyList(),
     onAddCustomer: (name: String, phone: String, address: String, notes: String) -> Unit,
     onDeleteCustomer: (Customer) -> Unit = {},
     onUpdateSale: (SaleTransaction) -> Unit = {},
@@ -125,6 +126,20 @@ fun CustomersScreen(
             .filter { (_, customerSales) -> customerSales.size >= 2 }
             .sortedByDescending { (_, customerSales) -> customerSales.size }
             .map { (customer, _) -> customer }
+    }
+
+    // Payment history for the section at the bottom: all recorded payments,
+    // newest first. Searching filters it to the matching customers.
+    val historyPayments = remember(allPayments, customers, searchQuery) {
+        val q = searchQuery.trim().lowercase()
+        if (q.isBlank()) {
+            allPayments
+        } else {
+            val matchingIds = customers.filter {
+                it.name.lowercase().contains(q) || it.phoneNumber.lowercase().contains(q)
+            }.map { it.id }.toSet()
+            allPayments.filter { it.customerId in matchingIds }
+        }
     }
 
     LazyColumn(
@@ -245,6 +260,62 @@ fun CustomersScreen(
                 GeminiHairline()
             }
         }
+
+        // Payment History — who paid, how much, and the date + time.
+        // Old payments are already recorded, so they show here too.
+        if (historyPayments.isNotEmpty()) {
+            item {
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = if (strings.isHindi) "भुगतान इतिहास" else "Payment History",
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        fontSize = 20.sp,
+                        letterSpacing = (-0.5).sp
+                    ),
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = if (strings.isHindi) "${historyPayments.size} भुगतान • कुल प्राप्त ₹${String.format("%.2f", historyPayments.sumOf { it.amountPaid })}" else "${historyPayments.size} payments • Total received ₹${String.format("%.2f", historyPayments.sumOf { it.amountPaid })}",
+                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.5.sp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+            items(historyPayments, key = { "payment_${it.id}" }) { payment ->
+                val payerName = customers.firstOrNull { it.id == payment.customerId }?.name
+                    ?: if (strings.isHindi) "अज्ञात ग्राहक" else "Unknown customer"
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = payerName,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = formatPaymentDateTime(payment),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        text = "₹${String.format("%.2f", payment.amountPaid)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = geminiAccent()
+                    )
+                }
+                GeminiHairline()
+            }
+        }
     }
 
     if (showAddDialog) {
@@ -315,6 +386,17 @@ fun CustomersScreen(
                 saleToEdit = null
             }
         )
+    }
+}
+
+// Date + time of a payment, e.g. "28 Nov 2026, 5:42 PM". Every payment
+// stores the moment it was recorded (timestamp), old ones included, so the
+// history can show the time as well as the date.
+private fun formatPaymentDateTime(payment: PaymentTransaction): String {
+    return if (payment.timestamp > 0) {
+        SimpleDateFormat("dd MMM yyyy, h:mm a", Locale.getDefault()).format(Date(payment.timestamp))
+    } else {
+        payment.dateString
     }
 }
 
@@ -677,7 +759,7 @@ fun CustomerItemCard(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                text = payment.dateString,
+                                text = formatPaymentDateTime(payment),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
@@ -702,7 +784,7 @@ fun CustomerItemCard(
                         appendLine("${if (strings.isHindi) "बाकी" else "Balance due"}: ₹${String.format("%.2f", balanceDue)}")
                         appendLine(if (strings.isHindi) "भुगतान इतिहास:" else "Payment history:")
                         payments.forEach { payment ->
-                            appendLine("${payment.dateString}: ₹${String.format("%.2f", payment.amountPaid)}")
+                            appendLine("${formatPaymentDateTime(payment)}: ₹${String.format("%.2f", payment.amountPaid)}")
                         }
                     }
                     clipboardManager.setText(AnnotatedString(invoiceText))

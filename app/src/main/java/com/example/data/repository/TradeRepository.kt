@@ -91,6 +91,10 @@ class TradeRepository(
         return paymentDao.getPaymentsForCustomer(customerId)
     }
 
+    fun getAllPayments(): Flow<List<PaymentTransaction>> {
+        return paymentDao.getAllPayments()
+    }
+
     suspend fun clearAllData() = withContext(Dispatchers.IO) {
         saleDao.deleteAllSales()
         batchDao.deleteAllBatches()

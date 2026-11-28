@@ -15,6 +15,9 @@ interface PaymentDao {
     @Query("SELECT * FROM payment_transactions WHERE customerId = :customerId AND isDeleted = 0 ORDER BY timestamp DESC")
     fun getPaymentsForCustomer(customerId: Long): Flow<List<PaymentTransaction>>
 
+    @Query("SELECT * FROM payment_transactions WHERE isDeleted = 0 ORDER BY timestamp DESC")
+    fun getAllPayments(): Flow<List<PaymentTransaction>>
+
     @Query("SELECT * FROM payment_transactions WHERE isDeleted = 0")
     suspend fun getAllPaymentsList(): List<PaymentTransaction>
 

@@ -103,6 +103,9 @@ class TradeViewModel(
     val allSales: StateFlow<List<SaleTransaction>> = repository.allSales
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val allPayments: StateFlow<List<PaymentTransaction>> = repository.getAllPayments()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val deletedCustomers = repository.database.customerDao().getDeletedCustomers()
     val deletedProducts = repository.database.productDao().getDeletedProducts()
     val deletedSales = repository.database.saleDao().getDeletedSales()

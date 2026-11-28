@@ -153,6 +153,7 @@ fun MainAppScreen(
     val products by viewModel.allProducts.collectAsStateWithLifecycle()
     val customers by viewModel.allCustomers.collectAsStateWithLifecycle()
     val sales by viewModel.allSales.collectAsStateWithLifecycle()
+    val allPayments by viewModel.allPayments.collectAsStateWithLifecycle()
     val reportMetrics by viewModel.reportMetrics.collectAsStateWithLifecycle()
 
     var showSettingsDialog by remember { mutableStateOf(false) }
@@ -499,6 +500,7 @@ fun MainAppScreen(
                     4 -> CustomersScreen(
                         customers = customers,
                         sales = sales,
+                        allPayments = allPayments,
                         onAddCustomer = { name, phone, address, notes ->
                             viewModel.addCustomer(name, phone, address, notes)
                             Toast.makeText(context, "Customer added to CRM", Toast.LENGTH_SHORT).show()
